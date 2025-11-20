@@ -1,8 +1,9 @@
-from typing import Any, Callable
-
+import asyncio
+import os
+from typing import cast
+import json
 from lfx.io import MessageTextInput
 from langflow.inputs import MultilineInput
-from pydantic import BaseModel
 
 from lfx.base.agents.agent import LCToolsAgentComponent
 from lfx.io import Output
@@ -10,7 +11,17 @@ from lfx.io import Output
 from langchain_core.runnables import Runnable
 from lfx.schema.message import Message
 from lfx.log.logger import logger
+from os.path import join
 
+from altk.toolkit_core.llm.base import get_llm
+from altk.toolkit_core.core.toolkit import AgentPhase
+from altk.pre_tool_guard_toolkit import PreToolGuardComponent, ToolGuardComponentConfig, ToolGuardBuildInput, ToolGuardBuildOutput
+
+from lfx.components.agents.open_api import tools_to_openapi 
+
+MODEL = "gpt-4o-2024-08-06"
+STEP1 = "Step_1"
+STEP2 = "Step_2"
 
 class PoliciesComponent(LCToolsAgentComponent):
     def create_agent_runnable(self) -> Runnable:
@@ -62,14 +73,32 @@ class PoliciesComponent(LCToolsAgentComponent):
         else:
             logger.error("🔒️ToolGuard: Policies cannot be empty!")
 
-        # TODO: the actual buildtime code should come here, and the final result assigned to guard_code
-        guard_code = f"def book_reservation_guard(args, history, api):\n" \
-                     f"     if int(args.passengers) == 0:\n" \
-                     f"         raise PolicyValidationException('A reservation must have at least one passenger.')\n" \
-                     f"     if int(args.passengers) > 5:\n" \
-                     f"         raise PolicyValidationException('A reservation can include up to five passengers.')\n" \
-                     f"     ... \n"
+        OPENAILiteLLMClientOutputVal = get_llm("litellm.output_val")
+        config = ToolGuardComponentConfig(
+            llm_client = OPENAILiteLLMClientOutputVal(
+                model_name=MODEL,
+                custom_llm_provider="azure", #FIXME
+            )
+        )
+        component = PreToolGuardComponent(config = config)
+        
+        work_dir = self.guard_code_path
+        os.makedirs(work_dir, exist_ok=True)
+        open_api = tools_to_openapi(self.tools)
+        open_api_path = join(work_dir, "open_api.json")
+        with open(open_api_path, "w") as f:
+            json.dump(open_api, f, indent=2)
 
-        guard_code += ('\n\n' + self.guard_code_path)
-
-        return Message(text=guard_code, sender="toolguard buildtime")
+        toolguard_step1_dir = join(work_dir, STEP1)
+        out_dir = join(work_dir, STEP2)
+        build_input = ToolGuardBuildInput(
+            policy_text=self.policies,
+            tools=open_api_path,
+            step1_dir = toolguard_step1_dir,
+            out_dir=out_dir,
+        )
+        output = cast(ToolGuardBuildOutput, asyncio.run(
+            component.aprocess(build_input, phase=AgentPhase.BUILDTIME)
+        ))
+        return Message(text=output.root_dir, sender="toolguard buildtime")
+    

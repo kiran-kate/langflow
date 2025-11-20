@@ -8,20 +8,20 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
-from altk.core.llm import get_llm
-from altk.core.toolkit import AgentPhase, ComponentConfig
-from altk.post_tool.code_generation.code_generation import (
+from altk.toolkit_core.llm.base import get_llm
+from altk.toolkit_core.core.toolkit import AgentPhase, ComponentConfig
+from altk.post_tool_reflection_toolkit.code_generation.code_generation import (
     CodeGenerationComponent,
     CodeGenerationComponentConfig,
 )
 
-from altk.pre_tool.sparc import SPARCReflectionComponent
-from altk.pre_tool.core import (
+from altk.pre_tool_reflection_toolkit.sparc import SPARCReflectionComponent
+from altk.pre_tool_reflection_toolkit.core import (
     SPARCExecutionMode,
     Track,
     SPARCReflectionRunInput
 )
-from altk.post_tool.core.toolkit import CodeGenerationRunInput
+from altk.post_tool_reflection_toolkit.core.toolkit import CodeGenerationRunInput
 from dotenv import load_dotenv
 from langchain.agents import AgentExecutor, BaseMultiActionAgent, BaseSingleActionAgent
 from langchain_anthropic.chat_models import ChatAnthropic
@@ -340,17 +340,18 @@ class ProtectedTool(BaseTool):
 
             # toolGuard invocation point
             result = tool_guard_validation(
-                path=self.guard_path,
+                toolguard_path=self.guard_path,
                 fc=[tool_guard_arguments],
                 messages=self.conversation_context,
                 tools=self.tool_specs,
             )
-
-            if result["valid"]:  # tool guard returned Ok
+            logger.info(f"result={result}")
+            if not result.violation:  # tool guard returned Ok
                 logger.info(f"🔒️[Ok] ToolGuard evaluated and approved running {self.name}")
                 return self._execute_tool(*args, **kwargs)
+            
             logger.info(f"🔒️[X] ToolGuard evaluated and rejected running {self.name}")
-            error_msg = result["error_msg"]
+            error_msg = result.violation.user_message or "Policy violation"
             return error_msg
 
         except Exception as e:
